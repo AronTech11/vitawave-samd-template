@@ -6,7 +6,10 @@
       "version": "18",
       "nodeGypDependencies": true
     },
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers-extra/features/sqlite:1": {
+      "version": "latest"
+    }
   },
   "customizations": {
     "vscode": {
