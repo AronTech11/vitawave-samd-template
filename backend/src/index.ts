@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import devicesRouter from './routes/devices';
 
 dotenv.config();
 
@@ -23,6 +24,8 @@ app.get('/', (_req: Request, res: Response) => {
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'healthy' });
 });
+
+app.use('/api/devices', devicesRouter);
 
 // Start server
 app.listen(PORT, () => {
