@@ -36,5 +36,8 @@
     "eslint-plugin-react-native": "^4.1.0",
     "prettier": "^3.0.0",
     "typescript": "^5.2.0"
+  },
+  "dependencies": {
+    "date-fns": "^4.1.0"
   }
 }
