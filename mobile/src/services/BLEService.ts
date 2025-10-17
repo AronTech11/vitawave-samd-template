@@ -82,3 +82,4 @@ export class BLEService {
 }
 
 export const bleService = new BLEService();
+export default BLEService;
