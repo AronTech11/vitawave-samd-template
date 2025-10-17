@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { Device } from 'react-native-ble-plx';
+// import { useNavigation } from '@react-navigation/native';
 import { RootState, AppDispatch } from '../../store';
 import {
   startScanning,
@@ -21,10 +22,15 @@ import {
   disconnect,
   setSimulationMode,
 } from '../../store/deviceSlice';
+import { addReading } from '../../store/readingsSlice';
 import BleService from '../../services/BLEService';
+import { storageService } from '../../services/StorageService';
+import { syncService } from '../../services/SyncService';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import Spinner from '../../components/Spinner';
+import ReadingModal from '../../components/ReadingModal';
+import { Reading } from '../../models/Reading';
 
 /**
  * BLE Pairing Screen
@@ -51,6 +57,7 @@ const USE_SIMULATION = process.env.__DEV_SIMULATE_BLE__ === 'true' || __DEV__;
 
 const BLEPairingScreen: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
+  // const navigation = useNavigation(); // TODO: Use for navigation after reading
   const {
     isScanning,
     isConnecting,
@@ -59,8 +66,18 @@ const BLEPairingScreen: React.FC = () => {
     connectedDeviceId,
     simulationMode,
   } = useSelector((state: RootState) => state.device);
+  const { user } = useSelector((state: RootState) => state.auth);
 
   const [bleService] = useState(() => new BleService());
+  const [showSimulateButton, setShowSimulateButton] = useState(false);
+  const [scanTimer, setScanTimer] = useState<NodeJS.Timeout | null>(null);
+  
+  // Reading modal state
+  const [showReadingModal, setShowReadingModal] = useState(false);
+  const [currentReading, setCurrentReading] = useState<Reading | null>(null);
+  const [isReadingLoading, setIsReadingLoading] = useState(false);
+  const [readingError, setReadingError] = useState<string | null>(null);
+  const [isSavingReading, setIsSavingReading] = useState(false);
 
   useEffect(() => {
     // Set simulation mode in Redux
@@ -71,6 +88,9 @@ const BLEPairingScreen: React.FC = () => {
 
     return () => {
       bleService.stopScan();
+      if (scanTimer) {
+        clearTimeout(scanTimer);
+      }
     };
   }, []);
 
@@ -102,6 +122,13 @@ const BLEPairingScreen: React.FC = () => {
   const handleStartScan = async () => {
     dispatch(clearDiscoveredDevices());
     dispatch(startScanning());
+    setShowSimulateButton(false);
+
+    // Start 8-second timer to show simulate button
+    const timer = setTimeout(() => {
+      setShowSimulateButton(true);
+    }, 8000);
+    setScanTimer(timer);
 
     try {
       await bleService.startScan((device: Device) => {
@@ -129,6 +156,10 @@ const BLEPairingScreen: React.FC = () => {
   const handleStopScan = () => {
     bleService.stopScan();
     dispatch(stopScanning());
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+      setScanTimer(null);
+    }
   };
 
   const handleConnect = async (device: Device) => {
@@ -151,6 +182,88 @@ const BLEPairingScreen: React.FC = () => {
       await bleService.disconnect();
       dispatch(disconnect());
     }
+  };
+
+  const handleTakeReading = async (_deviceId?: string) => {
+    setShowReadingModal(true);
+    setIsReadingLoading(true);
+    setReadingError(null);
+    setCurrentReading(null);
+
+    try {
+      // Get patient ID from user (assume user.id is patientId for now)
+      const patientId = user?.id || 1;
+      
+      // Read from BLE device
+      const partialReading = await bleService.readBloodPressure(patientId);
+      
+      // Create full reading with local fields (StorageService will add these, but we need them for display)
+      const fullReading: Reading = {
+        ...partialReading,
+        localId: `uuid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        deviceId: partialReading.deviceId || 'Unknown',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      
+      setCurrentReading(fullReading);
+      setIsReadingLoading(false);
+    } catch (error) {
+      console.error('Reading error:', error);
+      setReadingError(
+        error instanceof Error ? error.message : 'Failed to take reading'
+      );
+      setIsReadingLoading(false);
+    }
+  };
+
+  const handleSimulateReading = () => {
+    handleTakeReading('MockDevice-123');
+  };
+
+  const handleSaveReading = async () => {
+    if (!currentReading) return;
+
+    setIsSavingReading(true);
+    try {
+      // Save to local storage (StorageService will add localId, createdAt, updatedAt)
+      const savedReading = await storageService.saveReading({
+        id: currentReading.id,
+        patientId: currentReading.patientId,
+        timestamp: currentReading.timestamp,
+        systolicBP: currentReading.systolicBP,
+        diastolicBP: currentReading.diastolicBP,
+        heartRate: currentReading.heartRate,
+        deviceId: currentReading.deviceId || 'Unknown',
+        synced: currentReading.synced,
+      });
+      
+      // Add to Redux store
+      dispatch(addReading(savedReading));
+      
+      // Trigger sync
+      syncService.syncReadings().catch(console.error);
+      
+      Alert.alert('Success', 'Reading saved successfully');
+      setShowReadingModal(false);
+      setCurrentReading(null);
+    } catch (error) {
+      console.error('Save error:', error);
+      Alert.alert('Error', 'Failed to save reading');
+    } finally {
+      setIsSavingReading(false);
+    }
+  };
+
+  const handleRetryReading = () => {
+    handleTakeReading(connectedDeviceId || undefined);
+  };
+
+  const handleCloseModal = () => {
+    setShowReadingModal(false);
+    setCurrentReading(null);
+    setReadingError(null);
+    setIsReadingLoading(false);
   };
 
   const renderDeviceItem = ({ item }: { item: Device }) => (
@@ -196,6 +309,11 @@ const BLEPairingScreen: React.FC = () => {
           <>
             <Text style={styles.connectedId}>ID: {connectedDeviceId}</Text>
             <Button
+              title="Take Reading"
+              onPress={() => handleTakeReading(connectedDeviceId)}
+              style={styles.button}
+            />
+            <Button
               title="Disconnect"
               onPress={handleDisconnect}
               variant="danger"
@@ -218,6 +336,19 @@ const BLEPairingScreen: React.FC = () => {
               <View style={styles.scanningIndicator}>
                 <Spinner size="small" />
                 <Text style={styles.scanningText}>Scanning...</Text>
+              </View>
+            )}
+            {showSimulateButton && !isScanning && discoveredDevices.length === 0 && (
+              <View style={styles.simulateSection}>
+                <Text style={styles.simulateText}>
+                  No devices found. Try simulation mode:
+                </Text>
+                <Button
+                  title="📱 Simulate Reading"
+                  onPress={handleSimulateReading}
+                  variant="secondary"
+                  style={styles.button}
+                />
               </View>
             )}
           </View>
@@ -260,6 +391,17 @@ const BLEPairingScreen: React.FC = () => {
           mode
         </Text>
       </Card>
+
+      <ReadingModal
+        visible={showReadingModal}
+        reading={currentReading}
+        isLoading={isReadingLoading}
+        isSaving={isSavingReading}
+        error={readingError}
+        onClose={handleCloseModal}
+        onSave={handleSaveReading}
+        onRetry={handleRetryReading}
+      />
     </View>
   );
 };
@@ -358,6 +500,22 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontSize: 14,
     marginLeft: 8,
+  },
+  simulateSection: {
+    alignItems: 'center',
+    backgroundColor: '#FFF3CD',
+    borderColor: '#FFC107',
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 16,
+    padding: 16,
+  },
+  simulateText: {
+    color: '#856404',
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 12,
+    textAlign: 'center',
   },
   simulationBanner: {
     backgroundColor: '#FFF3CD',

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useRoute, RouteProp } from '@react-navigation/native';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../store';
-import { Reading } from '../../store/readingsSlice';
+import { Reading } from '../../models/Reading';
 import { PatientStackParamList } from '../../navigation/PatientStack';
 import Card from '../../components/Card';
 

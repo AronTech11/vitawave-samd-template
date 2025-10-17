@@ -1,14 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-
-export interface Reading {
-  id: number;
-  patientId: number;
-  timestamp: string;
-  systolicBP: number;
-  diastolicBP: number;
-  heartRate: number;
-  deviceId: string;
-}
+import { Reading } from '../models/Reading';
 
 interface ReadingsState {
   readings: Reading[];

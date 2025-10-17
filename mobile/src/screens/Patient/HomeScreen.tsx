@@ -1,23 +1,119 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useSelector, useDispatch } from 'react-redux';
+import { useNavigation } from '@react-navigation/native';
 import { RootState, AppDispatch } from '../../store';
 import { logout } from '../../store/authSlice';
+import { addReading } from '../../store/readingsSlice';
+import BleService from '../../services/BLEService';
+import { storageService } from '../../services/StorageService';
+import { syncService } from '../../services/SyncService';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
+import ReadingModal from '../../components/ReadingModal';
+import { Reading } from '../../models/Reading';
 
 const HomeScreen: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
+  const navigation = useNavigation();
   const { user } = useSelector((state: RootState) => state.auth);
   const { readings, lastSync } = useSelector((state: RootState) => state.readings);
   const { isConnected, connectedDeviceId } = useSelector(
     (state: RootState) => state.device
   );
 
+  const [bleService] = useState(() => new BleService());
+  const [showReadingModal, setShowReadingModal] = useState(false);
+  const [currentReading, setCurrentReading] = useState<Reading | null>(null);
+  const [isReadingLoading, setIsReadingLoading] = useState(false);
+  const [readingError, setReadingError] = useState<string | null>(null);
+  const [isSavingReading, setIsSavingReading] = useState(false);
+
   const latestReading = readings[0];
 
   const handleLogout = () => {
     dispatch(logout());
+  };
+
+  const handleTakeBP = async () => {
+    if (!isConnected) {
+      // Navigate to BLE pairing screen
+      navigation.navigate('BLEPairing' as never);
+      return;
+    }
+
+    // Take reading from connected device
+    setShowReadingModal(true);
+    setIsReadingLoading(true);
+    setReadingError(null);
+    setCurrentReading(null);
+
+    try {
+      const patientId = user?.id || 1;
+      const partialReading = await bleService.readBloodPressure(patientId);
+      
+      // Create full reading with local fields
+      const fullReading: Reading = {
+        ...partialReading,
+        localId: `uuid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        deviceId: partialReading.deviceId || 'Unknown',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      
+      setCurrentReading(fullReading);
+      setIsReadingLoading(false);
+    } catch (error) {
+      console.error('Reading error:', error);
+      setReadingError(
+        error instanceof Error ? error.message : 'Failed to take reading'
+      );
+      setIsReadingLoading(false);
+    }
+  };
+
+  const handleSaveReading = async () => {
+    if (!currentReading) return;
+
+    setIsSavingReading(true);
+    try {
+      // Save to local storage
+      const savedReading = await storageService.saveReading({
+        id: currentReading.id,
+        patientId: currentReading.patientId,
+        timestamp: currentReading.timestamp,
+        systolicBP: currentReading.systolicBP,
+        diastolicBP: currentReading.diastolicBP,
+        heartRate: currentReading.heartRate,
+        deviceId: currentReading.deviceId || 'Unknown',
+        synced: currentReading.synced,
+      });
+      
+      // Add to Redux store
+      dispatch(addReading(savedReading));
+      
+      // Trigger sync in background
+      syncService.syncReadings().catch(console.error);
+      
+      setShowReadingModal(false);
+      setCurrentReading(null);
+    } catch (error) {
+      console.error('Save error:', error);
+      setReadingError('Failed to save reading');
+    } finally {
+      setIsSavingReading(false);
+    }
+  };
+
+  const handleRetryReading = () => {
+    handleTakeBP();
+  };
+
+  const handleCloseModal = () => {
+    setShowReadingModal(false);
+    setCurrentReading(null);
+    setReadingError(null);
+    setIsReadingLoading(false);
   };
 
   return (
@@ -85,10 +181,8 @@ const HomeScreen: React.FC = () => {
           </Text>
         )}
         <Button
-          title="Take New Reading"
-          onPress={() => {
-            /* Navigate to device screen */
-          }}
+          title="💉 Take Blood Pressure"
+          onPress={handleTakeBP}
           style={styles.actionButton}
         />
         <Button
@@ -106,6 +200,17 @@ const HomeScreen: React.FC = () => {
         onPress={handleLogout}
         variant="danger"
         style={styles.logoutButton}
+      />
+
+      <ReadingModal
+        visible={showReadingModal}
+        reading={currentReading}
+        isLoading={isReadingLoading}
+        isSaving={isSavingReading}
+        error={readingError}
+        onClose={handleCloseModal}
+        onSave={handleSaveReading}
+        onRetry={handleRetryReading}
       />
     </ScrollView>
   );
